@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>IoT Mobile Sensor</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <style>
+        body { font-family: sans-serif; text-align: center; padding: 20px; background: #222; color: white; }
+        .slider-container { margin: 30px 0; }
+        input[type=range] { width: 100%; height: 25px; }
+        .value { font-size: 24px; font-weight: bold; color: #4CAF50; }
+        button { padding: 15px 30px; font-size: 18px; background: #e74c3c; color: white; border: none; border-radius: 8px; cursor: pointer; }
+        .status { margin-top: 20px; font-size: 14px; color: #aaa; }
+    </style>
+</head>
+<body>
+    <h2>📱 Mobile IoT Node</h2>
+    
+    <div class="slider-container">
+        <label>Temperature (°C)</label><br>
+        <input type="range" min="0" max="120" value="25" id="tempSlider" oninput="updateVal('tempVal', this.value)">
+        <div class="value" id="tempVal">25°C</div>
+    </div>
+
+    <div class="slider-container">
+        <label>Humidity (%)</label><br>
+        <input type="range" min="0" max="100" value="50" id="humSlider" oninput="updateVal('humVal', this.value)">
+        <div class="value" id="humVal">50%</div>
+    </div>
+
+    <button onclick="sendAttack()">SIMULATE ATTACK</button>
+    <div class="status" id="status">Status: Ready</div>
+
+    <script>
+        function updateVal(id, val) { document.getElementById(id).innerText = val + (id === 'tempVal' ? '°C' : '%'); sendData(); }
+
+        function sendData() {
+            let temp = parseFloat(document.getElementById("tempSlider").value);
+            let hum = parseFloat(document.getElementById("humSlider").value);
+            postData(temp, hum);
+        }
+
+        function sendAttack() {
+            // Set sliders to "Attack" mode visually
+            document.getElementById("tempSlider").value = 110;
+            updateVal('tempVal', 110);
+            document.getElementById("humSlider").value = 5;
+            updateVal('humVal', 5);
+            postData(110, 5);
+        }
+
+        function postData(temp, hum) {
+            fetch('/api/data', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ temperature: temp, humidity: hum })
+            })
+            .then(res => res.json())
+            .then(data => {
+                document.getElementById("status").innerText = "Server Reply: " + data.trust_status;
+                document.getElementById("status").style.color = data.trust_status.includes("Trusted") ? "#4CAF50" : "#e74c3c";
+            })
+            .catch(err => console.error("Error:", err));
+        }
+    </script>
+</body>
+</html>
