@@ -15,7 +15,6 @@ day_cycle = 0
 while True:
     try:
         # 1. Generate REALISTIC Patterns (Sine Wave for Temp)
-        # This makes the temperature go up and down smoothly like a real day
         temp_base = 25 + (10 * math.sin(day_cycle)) # Fluctuates between 15C and 35C
         
         # Add a tiny bit of random noise (sensors are never perfect)
