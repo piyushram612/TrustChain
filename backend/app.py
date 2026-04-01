@@ -5,6 +5,7 @@ import datetime
 import joblib
 import numpy as np
 import os
+import pandas as pd # REQUIRED: pip install pandas
 from flask import Flask, request, jsonify, render_template_string
 from flask_cors import CORS
 
@@ -14,8 +15,70 @@ CORS(app)
 # --- CONFIGURATION ---
 DB_NAME = "iot_project.db"
 MODEL_FILE = "trust_model.pkl"
+DATA_FILE = "sensor_data.csv" # Your downloaded Intel dataset
 
-# --- MOBILE UI HTML (Auto-Pilot Version) ---
+# --- REAL DATA GENERATOR LOGIC ---
+# This function loads the CSV once and streams it line-by-line
+def init_data_stream():
+    try:
+        print(f"📂 Loading Real Data from {DATA_FILE}...")
+        
+        # 1. Read CSV (Handle different delimiters just in case)
+        # Intel data is sometimes space-separated, sometimes comma. 
+        # We try comma first.
+        try:
+            df = pd.read_csv(DATA_FILE)
+        except:
+            # Fallback for space-separated files
+            df = pd.read_csv(DATA_FILE, delimiter=' ')
+            
+        # 2. Clean Column Names (Normalize to lower case)
+        df.columns = [c.lower().strip() for c in df.columns]
+        
+        print(f"✅ Loaded {len(df)} rows of Real-World Sensor Data!")
+
+        # 3. Create Infinite Generator
+        def generator():
+            while True: # Loop forever (restart file when done)
+                for index, row in df.iterrows():
+                    try:
+                        # Extract and ensure float type
+                        # Adjust keys if your CSV headers are different
+                        if 'temperature' in row:
+                            t = float(row['temperature'])
+                        elif 'temp' in row:
+                             t = float(row['temp'])
+                        else:
+                             t = 24.5 # Default
+
+                        if 'humidity' in row:
+                            h = float(row['humidity'])
+                        elif 'hum' in row:
+                            h = float(row['hum'])
+                        else:
+                            h = 45.0 # Default
+                            
+                        yield {"temperature": t, "humidity": h}
+                    except Exception:
+                        continue # Skip bad rows
+        return generator()
+
+    except Exception as e:
+        print(f"⚠️ Error loading CSV ({e}). Using Random Fallback mode.")
+        import random
+        def random_gen():
+            while True:
+                yield {
+                    "temperature": round(random.uniform(20, 25), 2), 
+                    "humidity": round(random.uniform(40, 50), 2)
+                }
+        return random_gen()
+
+# Initialize the stream
+data_stream = init_data_stream()
+
+
+# --- MOBILE UI HTML (Updated for Real Data Fetching) ---
 MOBILE_HTML = """
 <!DOCTYPE html>
 <html lang="en">
@@ -58,7 +121,7 @@ MOBILE_HTML = """
             margin-bottom: 5px;
         }
         
-        /* MODE TOGGLE (The Unique Part) */
+        /* MODE TOGGLE */
         .mode-switch {
             display: flex;
             background: #222;
@@ -85,7 +148,6 @@ MOBILE_HTML = """
             transition: transform 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275);
             z-index: 1;
         }
-        /* Auto Mode Active State */
         .auto-active .mode-slider { transform: translateX(96%); background: var(--neon-purple); }
         .auto-active body { border: 2px solid var(--neon-purple); }
 
@@ -121,7 +183,7 @@ MOBILE_HTML = """
             background: #fff;
             box-shadow: 0 0 15px currentColor;
             margin-top: -9px;
-            transition: left 0.3s ease; /* Smooth movement for Ghost Mode */
+            transition: left 0.3s ease;
         }
 
         /* ATTACK BUTTON */
@@ -154,12 +216,13 @@ MOBILE_HTML = """
     <div class="header">
         <div class="node-id">NODE: XJ-920</div>
         <div style="color: #666; font-size: 0.8rem;">SECURE IOT GATEWAY</div>
+        <div style="color: #444; font-size: 0.6rem; margin-top: 5px;">SOURCE: INTEL LAB DATASET</div>
     </div>
 
     <div class="mode-switch" id="modeSwitch" onclick="toggleAutoMode()">
         <div class="mode-slider"></div>
         <div class="mode-option" id="opt-manual" style="color: #000;">MANUAL</div>
-        <div class="mode-option" id="opt-auto" style="color: #888;">AUTO-PILOT</div>
+        <div class="mode-option" id="opt-auto" style="color: #888;">REAL DATA</div>
     </div>
 
     <div class="sensor-card" style="border-top: 3px solid var(--neon-cyan);">
@@ -185,13 +248,12 @@ MOBILE_HTML = """
         function toggleAutoMode() {
             isAuto = !isAuto;
             const switchEl = document.getElementById('modeSwitch');
-            const body = document.body;
             
             if (isAuto) {
                 switchEl.classList.add('auto-active');
                 document.getElementById('opt-manual').style.color = '#888';
                 document.getElementById('opt-auto').style.color = '#000';
-                document.getElementById('status').innerText = "♻️ AUTO-PILOT ENGAGED";
+                document.getElementById('status').innerText = "♻️ STREAMING REAL DATA...";
                 document.getElementById('status').style.color = "var(--neon-purple)";
                 startAutoPilot();
             } else {
@@ -207,27 +269,23 @@ MOBILE_HTML = """
         function startAutoPilot() {
             // Run this loop every 2 seconds
             autoInterval = setInterval(() => {
-                // 1. Decide: Normal (90%) or Attack (10%)
-                const isAttack = Math.random() > 0.9; 
                 
-                let t, h;
-                if(isAttack) {
-                    // Generate Attack Values
-                    t = Math.floor(Math.random() * (115 - 90) + 90); // 90-115
-                    h = Math.floor(Math.random() * 10); // 0-10
-                } else {
-                    // Generate Safe Values
-                    t = Math.floor(Math.random() * (30 - 20) + 20); // 20-30
-                    h = Math.floor(Math.random() * (60 - 40) + 40); // 40-60
-                }
+                // --- NEW LOGIC: FETCH REAL DATA INSTEAD OF RANDOM ---
+                fetch('/api/get_simulation_data')
+                    .then(res => res.json())
+                    .then(data => {
+                        const t = Math.round(data.temperature);
+                        const h = Math.round(data.humidity);
 
-                // 2. "Ghost Touch" - Move the sliders visually!
-                document.getElementById('tempSlider').value = t;
-                document.getElementById('humSlider').value = h;
-                updateDisplay(t, h);
+                        // Visual Update
+                        document.getElementById('tempSlider').value = t;
+                        document.getElementById('humSlider').value = h;
+                        updateDisplay(t, h);
 
-                // 3. Send Data
-                sendData(t, h);
+                        // Send to Blockchain
+                        sendData(t, h);
+                    })
+                    .catch(err => console.error("Data Fetch Error:", err));
 
             }, 2000);
         }
@@ -237,7 +295,7 @@ MOBILE_HTML = """
         }
 
         function updateManual() {
-            if(isAuto) return; // Ignore touch if in auto mode
+            if(isAuto) return; 
             let t = document.getElementById('tempSlider').value;
             let h = document.getElementById('humSlider').value;
             updateDisplay(t, h);
@@ -245,18 +303,21 @@ MOBILE_HTML = """
         }
 
         function manualAttack() {
-            if(isAuto) toggleAutoMode(); // Stop auto if user forces attack
-            document.getElementById('tempSlider').value = 110;
-            document.getElementById('humSlider').value = 5;
-            updateDisplay(110, 5);
-            sendData(110, 5);
+            if(isAuto) toggleAutoMode(); 
+            // Attack Values
+            const t = 110;
+            const h = 5;
+            
+            document.getElementById('tempSlider').value = t;
+            document.getElementById('humSlider').value = h;
+            updateDisplay(t, h);
+            sendData(t, h);
         }
 
         function updateDisplay(t, h) {
             document.getElementById('tempVal').innerText = t + "°C";
             document.getElementById('humVal').innerText = h + "%";
             
-            // Color warning
             const tVal = document.getElementById('tempVal');
             if(t > 80) tVal.style.color = "var(--neon-red)";
             else tVal.style.color = "#fff";
@@ -270,7 +331,6 @@ MOBILE_HTML = """
             })
             .then(res => res.json())
             .then(data => {
-                // Pulse Animation
                 const card = document.querySelector('.sensor-card');
                 if(data.trust_status.includes("Trusted")) {
                     card.classList.remove('pulse-r');
@@ -384,8 +444,14 @@ def assess_trust(temp, humidity):
 # --- ROUTES ---
 @app.route('/mobile')
 def mobile_ui():
-    # Return the HTML string directly (No file needed)
     return render_template_string(MOBILE_HTML)
+
+# NEW ROUTE: Fetch Real Data from CSV
+@app.route('/api/get_simulation_data', methods=['GET'])
+def get_simulation_data():
+    # Get next data point from the generator
+    data = next(data_stream)
+    return jsonify(data)
 
 @app.route('/api/data', methods=['POST'])
 def receive_sensor_data():
@@ -405,20 +471,15 @@ def receive_sensor_data():
         'confidence': confidence
     }
 
-    # --- CRITICAL FIX START ---
-    # We ALWAYS add the block to the chain, even if it is "Malicious".
-    # This allows the Blockchain Ledger to contain the "Attack" blocks,
-    # which the Dashboard reads to increase the "Threats Blocked" counter.
+    # 3. Add to Blockchain
     new_block = iot_chain.add_data(record)
     block_hash = iot_chain.hash(new_block)
-    
     save_to_db(record, block_hash)
-    # --- CRITICAL FIX END ---
 
     if "Trusted" in trust_status:
-        print(f"✅ AI Approved! Mined Block #{new_block['index']}")
+        print(f" AI Approved (Real Data)! Mined Block #{new_block['index']}")
     else:
-        print(f"⚠️ THREAT DETECTED! Recorded Malicious Block #{new_block['index']}")
+        print(f" THREAT DETECTED! Recorded Malicious Block #{new_block['index']}")
 
     return jsonify(record)
 
@@ -427,5 +488,4 @@ def get_blockchain():
     return jsonify(iot_chain.chain)
 
 if __name__ == '__main__':
-    # '0.0.0.0' allows external devices (like your phone) to connect
     app.run(host='0.0.0.0', port=5000, debug=True)

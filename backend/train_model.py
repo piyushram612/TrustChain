@@ -1,37 +1,65 @@
-import numpy as np
 import pandas as pd
+import numpy as np
 import joblib
 from sklearn.ensemble import IsolationForest
 
-# 1. Generate Synthetic Training Data
-np.random.seed(42)
-n_samples = 1000
+# --- CONFIGURATION ---
+DATA_FILE = "sensor_data.csv"
+MODEL_FILE = "trust_model.pkl"
 
-# Generate "Good" Data
-X_good = pd.DataFrame({
-    'temperature': np.random.normal(loc=25, scale=3, size=n_samples), 
-    'humidity': np.random.normal(loc=50, scale=5, size=n_samples),
-    'label': 'Trusted' # We add this label just for the CSV file readability
-})
+def train_model():
+    print(f" Loading Real-World Data from {DATA_FILE}...")
 
-# Generate "Bad" Data
-X_bad = pd.DataFrame({
-    'temperature': np.random.uniform(low=80, high=120, size=50), 
-    'humidity': np.random.uniform(low=0, high=10, size=50),
-    'label': 'Malicious'
-})
+    try:
+        # 1. READ DATA CORRECTLY (Handle Space Separation)
+        # The Intel dataset uses spaces, not commas. It also has no header row.
+        # We manually assign the column names: date, time, epoch, moteid, temp, humidity, light, voltage
+        df = pd.read_csv(DATA_FILE, sep='\s+', header=None, on_bad_lines='skip')
+        
+        # Manually name the columns based on Intel Lab documentation
+        df.columns = ['date', 'time', 'epoch', 'moteid', 'temperature', 'humidity', 'light', 'voltage']
+        
+        print(f" Loaded {len(df)} rows.")
 
-# Combine them
-X_final = pd.concat([X_good, X_bad], ignore_index=True)
+    except Exception as e:
+        print(f" Error loading CSV: {e}")
+        return
 
-# --- SAVE TO CSV (So you can see it) ---
-X_final.to_csv('sensor_dataset.csv', index=False)
-print("Dataset created and saved as 'sensor_dataset.csv'")
+    # 2. CLEAN THE DATA (Crucial Step)
+    # The raw dataset has some noise (e.g., temps like 122°C or -5°C which are sensor errors).
+    # We filter to keep only "Normal" Room Temperatures (15°C to 40°C)
+    # This ensures our model learns what "Safe" looks like.
+    print(" Cleaning data (removing sensor errors)...")
+    df = df[(df['temperature'] > 15) & (df['temperature'] < 40)]
+    df = df[(df['humidity'] > 0) & (df['humidity'] < 100)]
+    
+    print(f" Training on {len(df)} valid 'Normal' data points.")
 
-# 2. Train the Model (We drop the 'label' column because ML learns patterns, not answers)
-model = IsolationForest(n_estimators=100, contamination=0.05, random_state=42)
-model.fit(X_final[['temperature', 'humidity']])
+    # 3. SELECT FEATURES
+    X_train = df[['temperature', 'humidity']].values
 
-# 3. Save the Model
-joblib.dump(model, 'trust_model.pkl')
-print("Model trained and saved as 'trust_model.pkl'")
+    # 4. TRAIN THE MODEL
+    print(" Training Isolation Forest...")
+    # contamination=0.01 means we assume 1% of this data might still be outliers
+    model = IsolationForest(n_estimators=100, contamination=0.01, random_state=42)
+    model.fit(X_train)
+
+    # 5. SAVE THE MODEL
+    joblib.dump(model, MODEL_FILE)
+    print(f" Model saved to {MODEL_FILE}")
+
+    # --- VERIFICATION ---
+    print("\n---  TEST RESULTS ---")
+    
+    # Test Normal (Should be Trusted)
+    normal_val = [[24.5, 45.0]]
+    pred_normal = model.predict(normal_val)[0]
+    print(f"Input: {normal_val} -> {'✅ Trusted' if pred_normal == 1 else '❌ Malicious'}")
+
+    # Test Attack (Should be Malicious)
+    attack_val = [[110.0, 5.0]]
+    pred_attack = model.predict(attack_val)[0]
+    print(f"Input: {attack_val} -> {'✅ Trusted' if pred_attack == 1 else '⚠️ THREAT BLOCKED'}")
+
+if __name__ == "__main__":
+    train_model()
