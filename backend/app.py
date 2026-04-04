@@ -15,13 +15,13 @@ CORS(app)
 # --- CONFIGURATION ---
 DB_NAME = "iot_project.db"
 MODEL_FILE = "trust_model.pkl"
-DATA_FILE = "sensor_data.csv" # Your downloaded Intel dataset
+DATA_FILE = "sensor_dataset.csv" # Your downloaded Intel dataset
 
 # --- REAL DATA GENERATOR LOGIC ---
 # This function loads the CSV once and streams it line-by-line
 def init_data_stream():
     try:
-        print(f"📂 Loading Real Data from {DATA_FILE}...")
+        print(f"[INFO] Loading Real Data from {DATA_FILE}...")
         
         # 1. Read CSV (Handle different delimiters just in case)
         # Intel data is sometimes space-separated, sometimes comma. 
@@ -35,7 +35,7 @@ def init_data_stream():
         # 2. Clean Column Names (Normalize to lower case)
         df.columns = [c.lower().strip() for c in df.columns]
         
-        print(f"✅ Loaded {len(df)} rows of Real-World Sensor Data!")
+        print(f"[OK] Loaded {len(df)} rows of Real-World Sensor Data!")
 
         # 3. Create Infinite Generator
         def generator():
@@ -64,7 +64,7 @@ def init_data_stream():
         return generator()
 
     except Exception as e:
-        print(f"⚠️ Error loading CSV ({e}). Using Random Fallback mode.")
+        print(f"[ERROR] Error loading CSV ({e}). Using Random Fallback mode.")
         import random
         def random_gen():
             while True:
@@ -360,6 +360,10 @@ except Exception as e:
     print(f"Error loading model: {e}")
     model = None
 
+# --- LOAD ENHANCEMENT MODELS ---
+import trust_enhancements
+trust_enhancements.load_extended_models()
+
 # --- 2. DATABASE LAYER ---
 def init_db():
     conn = sqlite3.connect(DB_NAME)
@@ -458,28 +462,78 @@ def receive_sensor_data():
     data = request.json
     temp = data.get('temperature')
     hum = data.get('humidity')
+    sensor_id = data.get('sensor_id', 'sensor_1')
 
-    # 1. AI Assessment
-    trust_status, confidence = assess_trust(temp, hum)
+    # --- 1. Attack Simulation ---
+    sim_data, is_attacked = trust_enhancements.simulate_attack(
+        {'temperature': temp, 'humidity': hum}, probability=0.05
+    )
+    temp, hum = sim_data['temperature'], sim_data['humidity']
+
+    features = np.array([[temp, hum]])
     
-    # 2. Create the Data Record
+    # Base AI Assessment (preserved)
+    base_status, base_conf = assess_trust(temp, hum)
+    
+    # --- 2. Composite Score (SVM + Reputation) ---
+    composite_score = trust_enhancements.get_composite_trust_score(features, sensor_id, lambda_weight=0.5)
+    
+    # --- 3. Optional Ensemble Validation ---
+    final_decision = None
+    ensemble_triggered = False
+    
+    if 0.4 <= composite_score <= 0.6:
+        ensemble_triggered = True
+        ensemble_pred = trust_enhancements.trigger_ensemble_validation(features)
+        final_decision = 1 if ensemble_pred == 1 else 0
+        
+        # Adjust composite score based on ensemble vote
+        if final_decision == 1:
+            composite_score = min(1.0, composite_score + 0.2)
+            trust_status = "Trusted (Ensemble Verified)"
+        else:
+            composite_score = max(0.0, composite_score - 0.2)
+            trust_status = "Malicious (Ensemble Rejected)"
+    else:
+        final_decision = 1 if composite_score >= 0.5 else 0
+        trust_status = "Trusted" if final_decision == 1 else "Malicious"
+
+    # --- 4. Reputation Update ---
+    new_rep = trust_enhancements.update_reputation(sensor_id, final_decision)
+    
+    # --- 5. Explainability & Logging ---
+    explanation = trust_enhancements.get_explanation()
+    attack_str = "[ATTACK INJECTED]" if is_attacked else "[NORMAL]"
+    
+    print(f"\n{attack_str} Sensor: {sensor_id} | Final Decision: {trust_status}")
+    print(f"   -> Composite Score: {composite_score:.2f} | Reputation: {new_rep:.2f}")
+    if ensemble_triggered:
+        print(f"   -> Ensemble Triggered. Explanation: {explanation}")
+
+    confidence = composite_score if final_decision == 1 else (1 - composite_score)
+
+    # 6. Create the Data Record (Blockchain accepts arbitrary JSON)
     record = {
         'timestamp': str(datetime.datetime.now()), 
         'temperature': temp,
         'humidity': hum,
         'trust_status': trust_status,
-        'confidence': confidence
+        'confidence': confidence,
+        'sensor_id': sensor_id,
+        'reputation': new_rep,
+        'is_attacked': is_attacked,
+        'composite_score': composite_score
     }
 
-    # 3. Add to Blockchain
+    # 7. Add to Blockchain
     new_block = iot_chain.add_data(record)
     block_hash = iot_chain.hash(new_block)
     save_to_db(record, block_hash)
 
     if "Trusted" in trust_status:
-        print(f" AI Approved (Real Data)! Mined Block #{new_block['index']}")
+        print(f"[OK] AI Approved! Mined Block #{new_block['index']}")
     else:
-        print(f" THREAT DETECTED! Recorded Malicious Block #{new_block['index']}")
+        print(f"[ALERT] THREAT DETECTED! Recorded Malicious Block #{new_block['index']}")
 
     return jsonify(record)
 

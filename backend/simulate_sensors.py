@@ -28,7 +28,9 @@ while True:
             humidity = 5.0
 
         # 3. Send to Backend
-        payload = {"temperature": temperature, "humidity": humidity}
+        # Rotate through a few sensors to demonstrate reputation system
+        sensor_id = random.choice(["sensor_1", "sensor_2", "sensor_3"])
+        payload = {"temperature": temperature, "humidity": humidity, "sensor_id": sensor_id}
         response = requests.post(URL, json=payload)
         
         # 4. Print Result

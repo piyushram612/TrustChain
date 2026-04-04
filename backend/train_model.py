@@ -4,20 +4,16 @@ import joblib
 from sklearn.ensemble import IsolationForest
 
 # --- CONFIGURATION ---
-DATA_FILE = "sensor_data.csv"
+DATA_FILE = "sensor_dataset.csv"
 MODEL_FILE = "trust_model.pkl"
 
 def train_model():
     print(f" Loading Real-World Data from {DATA_FILE}...")
 
     try:
-        # 1. READ DATA CORRECTLY (Handle Space Separation)
-        # The Intel dataset uses spaces, not commas. It also has no header row.
-        # We manually assign the column names: date, time, epoch, moteid, temp, humidity, light, voltage
-        df = pd.read_csv(DATA_FILE, sep='\s+', header=None, on_bad_lines='skip')
-        
-        # Manually name the columns based on Intel Lab documentation
-        df.columns = ['date', 'time', 'epoch', 'moteid', 'temperature', 'humidity', 'light', 'voltage']
+        # 1. READ DATA CORRECTLY
+        df = pd.read_csv(DATA_FILE)
+        df.columns = [c.lower().strip() for c in df.columns]
         
         print(f" Loaded {len(df)} rows.")
 
@@ -48,18 +44,22 @@ def train_model():
     joblib.dump(model, MODEL_FILE)
     print(f" Model saved to {MODEL_FILE}")
 
+    # --- ENHANCEMENTS: TRAIN EXTRA MODELS ---
+    import trust_enhancements
+    trust_enhancements.train_extra_models(X_train)
+
     # --- VERIFICATION ---
     print("\n---  TEST RESULTS ---")
     
     # Test Normal (Should be Trusted)
     normal_val = [[24.5, 45.0]]
     pred_normal = model.predict(normal_val)[0]
-    print(f"Input: {normal_val} -> {'✅ Trusted' if pred_normal == 1 else '❌ Malicious'}")
+    print(f"Input: {normal_val} -> {'Trusted' if pred_normal == 1 else 'Malicious'}")
 
     # Test Attack (Should be Malicious)
     attack_val = [[110.0, 5.0]]
     pred_attack = model.predict(attack_val)[0]
-    print(f"Input: {attack_val} -> {'✅ Trusted' if pred_attack == 1 else '⚠️ THREAT BLOCKED'}")
+    print(f"Input: {attack_val} -> {'Trusted' if pred_attack == 1 else 'THREAT BLOCKED'}")
 
 if __name__ == "__main__":
     train_model()
