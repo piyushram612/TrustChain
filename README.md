@@ -26,13 +26,17 @@ pip install pandas numpy scikit-learn Flask flask-cors joblib streamlit requests
 
 To experience the full functionality of the application, follow these steps. **You will need three separate terminal windows** to run the backend, frontend, and simulated sensors concurrently.
 
-### 1. Train the Models (Optional but Recommended)
-If you haven't yet, or if you've added new datasets (e.g., the Intel Lab IoT dataset), you should train the initial trust models first. Run this from the root directory:
+### 1. Download the Dataset & Train the Models
+For the best performance and to fully utilize the system's capabilities, it is highly recommended to use the real Intel Lab IoT dataset.
+1. Download the `sensor_data.csv` (Intel Lab dataset) from Kaggle or an official source.
+2. Place the `sensor_data.csv` file directly into the root directory of this project.
+
+Once the dataset is in place, you should train the initial trust models. Run this command from the root directory:
 
 ```bash
 python backend/train_model.py
 ```
-> This will generate the necessary `.pkl` model files like `trust_model.pkl` in the `backend/` directory.
+> This will train the ensemble models and generate the necessary `.pkl` model files (e.g., `trust_model.pkl`) in the `backend/` directory.
 
 ### 2. Start the Backend API
 In your **first terminal**, execute the backend. This initializes the machine-learning pipeline, handles incoming API requests from sensors, and maintains the simulated Blockchain.
