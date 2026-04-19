@@ -15,64 +15,123 @@ CORS(app)
 # --- CONFIGURATION ---
 DB_NAME = "iot_project.db"
 MODEL_FILE = "trust_model.pkl"
-DATA_FILE = "sensor_dataset.csv" # Your downloaded Intel dataset
+INTEL_DATA_FILE = "sensor_data.csv"       # Intel Lab IoT dataset (space-sep, no header)
+FALLBACK_DATA_FILE = "sensor_dataset.csv" # Original small CSV fallback
+
+INTEL_COLS = ['date', 'time', 'epoch', 'moteid',
+               'temperature', 'humidity', 'light', 'voltage']
+SENSOR_COLS = ['temperature', 'humidity', 'light', 'voltage']
+
+# Populated during init — used by /api/status and Streamlit sidebar
+dataset_info = {"source": "unknown", "rows": 0}
 
 # --- REAL DATA GENERATOR LOGIC ---
-# This function loads the CSV once and streams it line-by-line
+# Loads the CSV once, preprocesses it, and streams it row-by-row
 def init_data_stream():
-    try:
-        print(f"[INFO] Loading Real Data from {DATA_FILE}...")
-        
-        # 1. Read CSV (Handle different delimiters just in case)
-        # Intel data is sometimes space-separated, sometimes comma. 
-        # We try comma first.
+    global dataset_info
+
+    # ------------------------------------------------------------------ #
+    #  Helper: load & preprocess Intel Lab dataset                         #
+    # ------------------------------------------------------------------ #
+    def _load_intel(path):
+        df = pd.read_csv(path, sep=' ', header=None, names=INTEL_COLS,
+                         on_bad_lines='skip')
+        # Combine date + time → datetime
+        df['datetime'] = pd.to_datetime(df['date'] + ' ' + df['time'],
+                                        errors='coerce')
+        df.drop(columns=['date', 'time'], inplace=True)
+        # Coerce sensor columns to numeric
+        for col in SENSOR_COLS:
+            df[col] = pd.to_numeric(df[col], errors='coerce')
+        # Drop NaN rows
+        df.dropna(subset=SENSOR_COLS + ['datetime'], inplace=True)
+        df.reset_index(drop=True, inplace=True)
+        return df
+
+    # ------------------------------------------------------------------ #
+    #  Helper: 3-sigma labeling                                            #
+    # ------------------------------------------------------------------ #
+    def _add_sigma_labels(df):
+        means = df[SENSOR_COLS].mean()
+        stds  = df[SENSOR_COLS].std()
+        outlier_mask = ((df[SENSOR_COLS] - means).abs() > 3 * stds).any(axis=1)
+        import numpy as _np
+        df['label'] = _np.where(outlier_mask, 0, 1)
+        return df
+
+    # ------------------------------------------------------------------ #
+    #  Decide which dataset to use                                         #
+    # ------------------------------------------------------------------ #
+    df = None
+    using_intel = False
+
+    intel_path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                              '..', INTEL_DATA_FILE)
+    intel_path = os.path.normpath(intel_path)
+
+    if os.path.exists(intel_path):
         try:
-            df = pd.read_csv(DATA_FILE)
-        except:
-            # Fallback for space-separated files
-            df = pd.read_csv(DATA_FILE, delimiter=' ')
-            
-        # 2. Clean Column Names (Normalize to lower case)
-        df.columns = [c.lower().strip() for c in df.columns]
-        
-        print(f"[OK] Loaded {len(df)} rows of Real-World Sensor Data!")
+            print(f"[INFO] Loading Intel Lab IoT Dataset from '{intel_path}'...")
+            df = _load_intel(intel_path)
+            df = _add_sigma_labels(df)
+            if len(df) > 50000:
+                print(f"[INFO] Sampling 50,000 rows (from {len(df)})...")
+                df = df.sample(n=50000, random_state=42).reset_index(drop=True)
+            using_intel = True
+            dataset_info = {"source": f"Intel Lab IoT Dataset ({intel_path})",
+                            "rows": len(df)}
+            print(f"[OK] Intel dataset ready — {len(df)} rows.")
+        except Exception as e:
+            print(f"[WARNING] Intel dataset load failed ({e}). Falling back to '{FALLBACK_DATA_FILE}'.")
+            df = None
 
-        # 3. Create Infinite Generator
-        def generator():
-            while True: # Loop forever (restart file when done)
-                for index, row in df.iterrows():
-                    try:
-                        # Extract and ensure float type
-                        # Adjust keys if your CSV headers are different
-                        if 'temperature' in row:
-                            t = float(row['temperature'])
-                        elif 'temp' in row:
-                             t = float(row['temp'])
-                        else:
-                             t = 24.5 # Default
+    if df is None:
+        # Fallback path: look relative to app.py
+        fallback_path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                     '..', FALLBACK_DATA_FILE)
+        fallback_path = os.path.normpath(fallback_path)
+        try:
+            print(f"[WARNING] Using fallback dataset: '{fallback_path}'")
+            df = pd.read_csv(fallback_path)
+            df.columns = [c.lower().strip() for c in df.columns]
+            dataset_info = {"source": f"Fallback: {FALLBACK_DATA_FILE}",
+                            "rows": len(df)}
+            print(f"[OK] Fallback dataset ready — {len(df)} rows.")
+        except Exception as e:
+            print(f"[ERROR] Fallback dataset also failed ({e}). Using random generator.")
+            import random
+            def random_gen():
+                while True:
+                    yield {
+                        "temperature": round(random.uniform(20, 25), 2),
+                        "humidity":    round(random.uniform(40, 50), 2),
+                        "light":       round(random.uniform(100, 400), 2),
+                        "voltage":     round(random.uniform(2.4, 3.0), 2),
+                        "label":       1
+                    }
+            dataset_info = {"source": "Random generator (both CSV files missing)", "rows": 0}
+            return random_gen()
 
-                        if 'humidity' in row:
-                            h = float(row['humidity'])
-                        elif 'hum' in row:
-                            h = float(row['hum'])
-                        else:
-                            h = 45.0 # Default
-                            
-                        yield {"temperature": t, "humidity": h}
-                    except Exception:
-                        continue # Skip bad rows
-        return generator()
+    print(f"[INFO] Dataset in use: {dataset_info['source']} ({dataset_info['rows']} rows)")
 
-    except Exception as e:
-        print(f"[ERROR] Error loading CSV ({e}). Using Random Fallback mode.")
-        import random
-        def random_gen():
-            while True:
-                yield {
-                    "temperature": round(random.uniform(20, 25), 2), 
-                    "humidity": round(random.uniform(40, 50), 2)
-                }
-        return random_gen()
+    # ------------------------------------------------------------------ #
+    #  Build an infinite streaming generator from the dataframe            #
+    # ------------------------------------------------------------------ #
+    def generator():
+        while True:  # Loop forever — restart when exhausted
+            for _, row in df.iterrows():
+                try:
+                    t = float(row['temperature'])
+                    h = float(row['humidity'])
+                    # light / voltage only present in Intel dataset
+                    l = float(row['light'])   if 'light'   in row and pd.notna(row['light'])   else 0.0
+                    v = float(row['voltage']) if 'voltage' in row and pd.notna(row['voltage']) else 0.0
+                    lbl = int(row['label'])   if 'label'   in row else 1
+                    yield {"temperature": t, "humidity": h,
+                           "light": l, "voltage": v, "label": lbl}
+                except Exception:
+                    continue
+    return generator()
 
 # Initialize the stream
 data_stream = init_data_stream()
@@ -429,16 +488,20 @@ iot_chain = Blockchain()
 init_db()
 
 # --- 4. INTELLIGENCE LAYER ---
-def assess_trust(temp, humidity):
+def assess_trust(temp, humidity, light=0.0, voltage=0.0):
     if model is None:
         if 0 < temp < 50 and 0 < humidity < 100:
             return "Trusted (Fallback)", 0.5
         return "Malicious (Fallback)", 0.5
 
-    features = np.array([[temp, humidity]])
+    # Build full 4-feature vector; slice to however many the model expects
+    all_features = np.array([[temp, humidity, light, voltage]])
+    n = model.n_features_in_
+    features = all_features[:, :n]
+
     prediction = model.predict(features)[0]
     score = model.decision_function(features)[0]
-    confidence = 0.5 + (min(max(score, -0.5), 0.5)) 
+    confidence = 0.5 + (min(max(score, -0.5), 0.5))
 
     if prediction == 1:
         return "Trusted", confidence
@@ -457,11 +520,18 @@ def get_simulation_data():
     data = next(data_stream)
     return jsonify(data)
 
+# NEW ROUTE: Dataset status — used by Streamlit sidebar warning
+@app.route('/api/dataset_info', methods=['GET'])
+def get_dataset_info():
+    return jsonify(dataset_info)
+
 @app.route('/api/data', methods=['POST'])
 def receive_sensor_data():
     data = request.json
-    temp = data.get('temperature')
-    hum = data.get('humidity')
+    temp      = float(data.get('temperature', 24.5))
+    hum       = float(data.get('humidity',    45.0))
+    light     = float(data.get('light',        0.0))
+    voltage   = float(data.get('voltage',      0.0))
     sensor_id = data.get('sensor_id', 'sensor_1')
 
     # --- 1. Attack Simulation ---
@@ -470,21 +540,22 @@ def receive_sensor_data():
     )
     temp, hum = sim_data['temperature'], sim_data['humidity']
 
-    features = np.array([[temp, hum]])
-    
-    # Base AI Assessment (preserved)
-    base_status, base_conf = assess_trust(temp, hum)
-    
-    # --- 2. Composite Score (SVM + Reputation) ---
-    composite_score = trust_enhancements.get_composite_trust_score(features, sensor_id, lambda_weight=0.5)
+    # 2-feature slice for SVM/ensemble (trained on temp+humidity only)
+    features_2 = np.array([[temp, hum]])
+
+    # Base AI Assessment — uses 4-feature model automatically
+    base_status, base_conf = assess_trust(temp, hum, light, voltage)
+
+    # --- 2. Composite Score (SVM + Reputation) — still 2-feature ---
+    composite_score = trust_enhancements.get_composite_trust_score(features_2, sensor_id, lambda_weight=0.5)
     
     # --- 3. Optional Ensemble Validation ---
     final_decision = None
     ensemble_triggered = False
-    
+
     if 0.4 <= composite_score <= 0.6:
         ensemble_triggered = True
-        ensemble_pred = trust_enhancements.trigger_ensemble_validation(features)
+        ensemble_pred = trust_enhancements.trigger_ensemble_validation(features_2)
         final_decision = 1 if ensemble_pred == 1 else 0
         
         # Adjust composite score based on ensemble vote
